@@ -26,20 +26,51 @@ _progress_log:   list[str]  = []
 CACHE_FILE = "cache_state.json"
 
 
-def _save_cache(api_key, audio_path, scenes_text, language):
+def _save_cache(api_key, audio_path, scenes_text, language, preview_mode=None):
     global _matched_scenes
     try:
+        old_preview = False
+        if preview_mode is None and os.path.exists(CACHE_FILE):
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    old_data = json.load(f)
+                    old_preview = old_data.get("preview_mode", False)
+            except Exception:
+                pass
+        elif preview_mode is not None:
+            old_preview = preview_mode
+
         data = {
             "api_key": api_key,
             "audio_path": audio_path,
             "scenes_text": scenes_text,
             "language": language,
-            "matched_scenes": _matched_scenes
+            "matched_scenes": _matched_scenes,
+            "preview_mode": old_preview
         }
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"Lỗi lưu cache: {e}")
+
+
+def _save_preview_mode_cache(preview_mode):
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["preview_mode"] = preview_mode
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Lỗi lưu cache preview_mode: {e}")
+    else:
+        try:
+            data = {"preview_mode": preview_mode}
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Lỗi lưu cache preview_mode: {e}")
 
 
 def _clear_cache():
@@ -50,20 +81,21 @@ def _clear_cache():
             os.remove(CACHE_FILE)
         except Exception:
             pass
+    gr.Info("🗑️ Đã xóa cache thành công.")
     return (
         "",          # api_key
         None,        # audio_input
         "",          # scenes_input
         "Tiếng Việt", # language
-        "🗑️ Đã xóa cache thành công.", # update_log
         None,        # timestamp_table
+        False,       # preview_mode
     )
 
 
 def load_cached_state():
     global _matched_scenes
     if not os.path.exists(CACHE_FILE):
-        return "", None, "", "Tiếng Việt", None
+        return "", None, "", "Tiếng Việt", None, False
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -76,13 +108,14 @@ def load_cached_state():
         
         scenes_text = data.get("scenes_text", "")
         language = data.get("language", "Tiếng Việt")
+        preview_mode = data.get("preview_mode", False)
         
         table = results_to_table(_matched_scenes) if _matched_scenes else None
         
-        return api_key, audio_path, scenes_text, language, table
+        return api_key, audio_path, scenes_text, language, table, preview_mode
     except Exception as e:
         print(f"Lỗi load cache: {e}")
-        return "", None, "", "Tiếng Việt", None
+        return "", None, "", "Tiếng Việt", None, False
 
 
 # _build_timeline_fig was removed since the timeline plot is no longer needed.
@@ -94,35 +127,33 @@ def analyze_timestamps(api_key, audio_path, scenes_text, language):
     global _matched_scenes, _sorted_images
 
     if not api_key.strip():
-        return None, "❌ Vui lòng nhập OpenAI API Key.", None
+        raise gr.Error("Vui lòng nhập OpenAI API Key.")
     if not audio_path:
-        return None, "❌ Vui lòng upload file audio.", None
+        raise gr.Error("Vui lòng upload file audio.")
 
     scenes = [s.strip() for s in scenes_text.strip().splitlines() if s.strip()]
     if not scenes:
-        return None, "❌ Vui lòng nhập danh sách phân cảnh.", None
+        raise gr.Error("Vui lòng nhập danh sách phân cảnh.")
 
     lang_map  = {"Tiếng Việt": "vi", "English": "en", "Tự động": None}
     lang_code = lang_map.get(language, "vi")
 
     try:
-        log = "→ Gửi audio lên Whisper API...\n"
+        gr.Info("Đang gửi audio lên Whisper API...")
         segments, words = transcribe(audio_path, api_key.strip(), lang_code)
-        log += f"✓ Whisper: {len(segments)} segments, {len(words)} từ\n"
-        log += f"→ So khớp {len(scenes)} phân cảnh...\n"
-
+        
         _matched_scenes = match_scenes(scenes, segments, words)
         good = sum(1 for m in _matched_scenes if m["match_pct"] >= 60)
-        log += f"✓ Xong! {good}/{len(_matched_scenes)} phân cảnh khớp tốt (≥60%)\n"
+        gr.Info(f"Phân tích hoàn tất! Khớp {good}/{len(_matched_scenes)} phân cảnh.")
 
         # Ghi cache cục bộ
         _save_cache(api_key, audio_path, scenes_text, language)
 
         table = results_to_table(_matched_scenes)
-        return table, log
+        return table
 
     except Exception as e:
-        return None, f"❌ Lỗi: {str(e)}"
+        raise gr.Error(f"Lỗi: {str(e)}")
 
 
 # ── Sync timestamp từ bảng đã edit ───────────────────────────────────────────
@@ -132,7 +163,7 @@ def sync_timestamps(table, api_key, audio_path, scenes_text, language):
     global _matched_scenes
 
     if not _matched_scenes or table is None:
-        return "❌ Chưa có dữ liệu phân tích.", gr.update(), gr.update()
+        raise gr.Error("Chưa có dữ liệu phân tích.")
 
     try:
         rows    = table.values.tolist() if hasattr(table, "values") else table
@@ -154,10 +185,11 @@ def sync_timestamps(table, api_key, audio_path, scenes_text, language):
         _save_cache(api_key, audio_path, scenes_text, language)
 
         new_table = results_to_table(_matched_scenes)
-        return f"✅ Đã cập nhật {updated} dòng.", new_table
+        gr.Info(f"✅ Đã cập nhật {updated} phân cảnh thành công.")
+        return new_table
 
     except Exception as e:
-        return f"❌ Lỗi: {e}", gr.update()
+        raise gr.Error(f"Lỗi cập nhật: {e}")
 
 
 # ── Step 2: Render video ──────────────────────────────────────────────────────
@@ -168,6 +200,7 @@ def render_video(
     resolution_label,
     intensity,
     transition_dur,
+    preview_mode,
     progress=gr.Progress(track_tqdm=True),
 ):
     """Generator function — yield (video_path, log_text) từng bước để cập nhật UI real-time."""
@@ -221,6 +254,7 @@ def render_video(
                 ken_burns_intensity=float(intensity),
                 transition_dur=float(transition_dur),
                 progress_callback=on_progress,
+                preview_mode=preview_mode,
             )
         except Exception as e:
             _error[0] = str(e)
@@ -296,142 +330,310 @@ def export_srt():
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
-DESCRIPTION = """
-# 🎬 Auto Video Generator
-**Tự động tạo video từ ảnh phân cảnh + audio voiceover sử dụng OpenAI Whisper**
+BANNER_HTML = """
+<div class="banner">
+    <h1>🎬 Auto Video Generator</h1>
+    <p>Hệ thống tự động biên tập và tạo video phân cảnh bằng trí tuệ nhân tạo</p>
+</div>
 """
 
-with gr.Blocks(title="Auto Video Generator", theme=gr.themes.Soft()) as demo:
-    gr.Markdown(DESCRIPTION)
+CSS_THEME = """
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
 
-    with gr.Tabs():
-        with gr.Tab("⚙️ Bước 1: Phân tích & Biên tập Timestamp"):
+:root {
+    --body-background-fill: #090d16;
+    --container-background-fill: #0f172a;
+    --block-background-fill: #1e293b;
+    --block-border-color: #334155;
+    --border-color-primary: #334155;
+    --background-fill-primary: #1e293b;
+    --background-fill-secondary: #0f172a;
+    --input-background-fill: #0f172a;
+    --checkbox-background-color: #334155;
+    --button-primary-background-fill: linear-gradient(135deg, #6366f1, #8b5cf6);
+    --button-primary-background-fill-hover: linear-gradient(135deg, #4f46e5, #7c3aed);
+    --button-primary-text-color: #ffffff;
+    --button-secondary-background-fill: #334155;
+    --button-secondary-background-fill-hover: #475569;
+    --button-secondary-text-color: #ffffff;
+    --primary-500: #6366f1;
+    --primary-600: #8b5cf6;
+    --secondary-500: #10b981;
+}
+
+body, .gradio-container, * {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif !important;
+}
+
+.banner {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    text-align: center;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(5px);
+}
+
+.banner h1 {
+    font-size: 2.2rem !important;
+    font-weight: 700 !important;
+    background: linear-gradient(135deg, #a5b4fc, #c084fc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px !important;
+    letter-spacing: -0.025em;
+}
+
+.banner p {
+    color: #94a3b8 !important;
+    font-size: 1rem !important;
+    margin: 0 !important;
+}
+
+.gradio-container {
+    max-width: 1400px !important;
+}
+
+/* Form inputs & boxes */
+.gr-box {
+    border-radius: 12px !important;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
+}
+
+input, textarea, select {
+    border-radius: 8px !important;
+    border: 1px solid #334155 !important;
+    transition: all 0.2s ease !important;
+}
+
+input:focus, textarea:focus, select:focus {
+    border-color: #6366f1 !important;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
+}
+
+/* Custom styled buttons */
+.btn-primary {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 600 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3) !important;
+    transition: all 0.2s ease !important;
+}
+
+.btn-primary:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4) !important;
+}
+
+.btn-secondary {
+    background-color: #334155 !important;
+    border: 1px solid #475569 !important;
+    color: #f8fafc !important;
+    font-weight: 500 !important;
+    border-radius: 8px !important;
+    transition: all 0.2s ease !important;
+}
+
+.btn-secondary:hover {
+    background-color: #475569 !important;
+    border-color: #64748b !important;
+}
+
+.btn-stop {
+    background-color: #ef4444 !important;
+    border: none !important;
+    color: white !important;
+    font-weight: 500 !important;
+    border-radius: 8px !important;
+    transition: all 0.2s ease !important;
+    box-shadow: 0 4px 10px rgba(239, 68, 68, 0.2) !important;
+}
+
+.btn-stop:hover {
+    background-color: #dc2626 !important;
+    box-shadow: 0 6px 14px rgba(239, 68, 68, 0.3) !important;
+}
+
+/* Custom styled DataFrame */
+.gr-table-container {
+    border-radius: 12px !important;
+    border: 1px solid #334155 !important;
+    overflow: hidden !important;
+}
+
+/* Terminal styled log */
+.console-log textarea {
+    font-family: 'Fira Code', 'Courier New', Courier, monospace !important;
+    background-color: #020617 !important;
+    color: #22d3ee !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 8px !important;
+    font-size: 0.9rem !important;
+    line-height: 1.5 !important;
+    padding: 12px !important;
+}
+
+/* Section title headers */
+.column-title {
+    font-size: 1.25rem !important;
+    font-weight: 600 !important;
+    color: #f1f5f9 !important;
+    margin-bottom: 16px !important;
+    border-left: 4px solid #6366f1;
+    padding-left: 10px;
+}
+
+/* Custom styled accordion */
+.gr-accordion {
+    border: 1px solid #334155 !important;
+    border-radius: 8px !important;
+    background-color: #0f172a !important;
+    margin-bottom: 12px !important;
+}
+"""
+
+with gr.Blocks(title="Auto Video Generator", css=CSS_THEME, theme=gr.themes.Soft()) as demo:
+    gr.HTML(BANNER_HTML)
+
+    with gr.Row():
+        # ── Cột trái: Phân tích & Biên tập Timestamp (Step 1) ─────────────────
+        with gr.Column(scale=1):
+            gr.HTML("<div class='column-title'>⚙️ BƯỚC 1: PHÂN TÍCH & BIÊN TẬP</div>")
+            
+            with gr.Accordion("🔑 Cấu hình OpenAI API Key", open=True, elem_classes=["gr-accordion"]):
+                api_key = gr.Textbox(
+                    label="OpenAI API Key",
+                    placeholder="sk-...",
+                    type="password",
+                    info="Nhập API Key để chạy nhận dạng Whisper.",
+                )
+            
+            audio_input = gr.Audio(
+                label="🎵 File Audio Voiceover",
+                type="filepath",
+                sources=["upload"],
+            )
+            
+            language = gr.Radio(
+                label="🌐 Ngôn ngữ nhận dạng giọng nói",
+                choices=["Tiếng Việt", "English", "Tự động"],
+                value="Tiếng Việt",
+            )
+            
+            scenes_input = gr.Textbox(
+                label="📋 Danh sách phân cảnh (mỗi dòng 1 câu)",
+                placeholder="Nhập nội dung các phân cảnh ở đây...",
+                lines=6,
+            )
+            
             with gr.Row():
-                with gr.Column(scale=4):
-                    gr.Markdown("### 📥 Cấu hình đầu vào")
-                    api_key = gr.Textbox(
-                        label="🔑 OpenAI API Key",
-                        placeholder="sk-...",
-                        type="password",
-                        info="Chỉ lưu trữ trong phiên làm việc hiện tại.",
-                    )
-                    audio_input = gr.Audio(
-                        label="🎵 File Audio Voiceover",
-                        type="filepath",
-                        sources=["upload"],
-                    )
-                    language = gr.Radio(
-                        label="🌐 Ngôn ngữ nhận dạng giọng nói",
-                        choices=["Tiếng Việt", "English", "Tự động"],
-                        value="Tiếng Việt",
-                    )
-                    scenes_input = gr.Textbox(
-                        label="📋 Danh sách phân cảnh (mỗi dòng 1 câu)",
-                        placeholder="Nhập nội dung các phân cảnh ở đây...",
-                        lines=8,
-                    )
-                    with gr.Row():
-                        analyze_btn = gr.Button("🔍 Phân tích Timestamp", variant="primary", scale=2)
-                        clear_cache_btn = gr.Button("🗑️ Xóa Cache", variant="stop", scale=1)
-                    
-                    analyze_log = gr.Textbox(label="Nhật ký phân tích", lines=3, interactive=False)
+                analyze_btn = gr.Button("🔍 Phân tích Timestamp", variant="primary", elem_classes=["btn-primary"])
+                clear_cache_btn = gr.Button("🗑️ Xóa Cache", variant="stop", elem_classes=["btn-stop"])
 
-                with gr.Column(scale=5):
-                    gr.Markdown("### 📊 Kết quả Phân cảnh & Biên tập")
-                    gr.Markdown(
-                        "**💡 Hướng dẫn:** Bạn có thể chỉnh sửa trực tiếp thời gian **Bắt đầu** / **Kết thúc** "
-                        "trên bảng (nhập số giây hoặc định dạng `MM:SS.ss`), sau đó nhấn nút **Cập nhật** bên dưới."
-                    )
-                    timestamp_table = gr.Dataframe(
-                        headers=["#", "Bắt đầu", "Kết thúc", "Thời lượng", "Phân cảnh", "Khớp"],
-                        label="Bảng điều chỉnh timestamp",
-                        wrap=True,
-                        interactive=True,
-                        col_count=(6, "fixed"),
-                    )
-                    with gr.Row():
-                        update_btn = gr.Button("🔄 Cập nhật thay đổi", variant="secondary", scale=1)
-                        update_log = gr.Textbox(label="", lines=1, interactive=False, placeholder="Trạng thái cập nhật", scale=2)
-                    
-                    with gr.Accordion("⬇️ Xuất dữ liệu cấu hình / Phụ đề", open=False):
-                        with gr.Row():
-                            btn_json = gr.Button("⬇️ Xuất JSON", size="sm")
-                            btn_csv  = gr.Button("⬇️ Xuất CSV", size="sm")
-                            btn_srt  = gr.Button("⬇️ Xuất SRT Sub", size="sm")
-                        export_file = gr.File(label="Tải file đã xuất")
+            gr.HTML("<div style='margin-top: 24px; margin-bottom: 8px; font-weight: 500; color: #e2e8f0;'>📊 Bảng Điều Chỉnh Phân Phối Timestamp</div>")
+            timestamp_table = gr.Dataframe(
+                headers=["#", "Bắt đầu", "Kết thúc", "Thời lượng", "Phân cảnh", "Khớp"],
+                label=None,
+                wrap=True,
+                interactive=True,
+                col_count=(6, "fixed"),
+            )
+            
+            update_btn = gr.Button("🔄 Cập nhật thay đổi", variant="secondary", elem_classes=["btn-secondary"])
+            
+            with gr.Accordion("⬇️ Xuất dữ liệu cấu hình / Phụ đề", open=False, elem_classes=["gr-accordion"]):
+                with gr.Row():
+                    btn_json = gr.Button("⬇️ JSON", size="sm", elem_classes=["btn-secondary"])
+                    btn_csv  = gr.Button("⬇️ CSV", size="sm", elem_classes=["btn-secondary"])
+                    btn_srt  = gr.Button("⬇️ SRT", size="sm", elem_classes=["btn-secondary"])
+                export_file = gr.File(label="Tải file đã xuất")
 
-        with gr.Tab("🎬 Bước 2: Tạo & Render Video"):
-            with gr.Row():
-                with gr.Column(scale=4):
-                    gr.Markdown("### 🎥 Thiết lập Render")
-                    image_files = gr.File(
-                        label="🖼️ Tải lên ảnh phân cảnh (tên file dạng 001_..., 002_...)",
-                        file_count="multiple",
-                        file_types=["image"],
-                    )
-                    resolution = gr.Radio(
-                        label="📐 Tỉ lệ khung hình video",
-                        choices=[
-                            "Dọc 9:16 (TikTok/Reels)",
-                            "Ngang 16:9 (YouTube)",
-                            "Vuông 1:1 (Instagram)",
-                        ],
-                        value="Dọc 9:16 (TikTok/Reels)",
-                    )
-                    with gr.Accordion("⚙️ Cấu hình nâng cao (Camera & Chuyển cảnh)", open=False):
-                        intensity = gr.Slider(
-                            label="🎥 Cường độ Camera Motion (zoom/pan)",
-                            minimum=0.0,
-                            maximum=0.15,
-                            value=0.08,
-                            step=0.01,
-                            info="0 = tĩnh, 0.15 = chuyển động mạnh",
-                        )
-                        transition_dur = gr.Slider(
-                            label="✨ Thời gian Transition (giây)",
-                            minimum=0.2,
-                            maximum=1.5,
-                            value=0.8,
-                            step=0.1,
-                            info="Crossfade tối đa giữa các phân cảnh (adaptive theo khoảng lặng)",
-                        )
-                    
-                    render_btn  = gr.Button("🎬 Bắt đầu Tạo Video", variant="primary", size="lg")
-                    
-                    gr.Markdown("""
-                    **💡 Các hiệu ứng được tích hợp sẵn:**
-                    * **Camera Motion**: Tự động áp dụng ngẫu nhiên trong 10 kiểu chuyển động máy ảnh chuyên nghiệp.
-                    * **Crossfade**: Chuyển cảnh mượt mà, tự động điều chỉnh theo khoảng lặng của giọng đọc.
-                    * **Vignette**: Tạo viền tối cinematic chất lượng cao.
-                    """)
-
-                with gr.Column(scale=5):
-                    gr.Markdown("### 🎞️ Kết quả Video")
-                    video_output = gr.Video(label="Trình xem video kết quả", height=450)
-                    render_log  = gr.Textbox(label="📋 Tiến trình Render (real-time)", lines=6, interactive=False, autoscroll=True)
+        # ── Cột phải: Tạo & Render Video (Step 2) ──────────────────────────
+        with gr.Column(scale=1):
+            gr.HTML("<div class='column-title'>🎬 BƯỚC 2: DỰNG & RENDER VIDEO</div>")
+            
+            image_files = gr.File(
+                label="🖼️ Tải lên ảnh phân cảnh (tên file dạng 001_..., 002_...)",
+                file_count="multiple",
+                file_types=["image"],
+                height=150,
+            )
+            
+            resolution = gr.Radio(
+                label="📐 Tỉ lệ khung hình video",
+                choices=[
+                    "Dọc 9:16 (TikTok/Reels)",
+                    "Ngang 16:9 (YouTube)",
+                    "Vuông 1:1 (Instagram)",
+                ],
+                value="Dọc 9:16 (TikTok/Reels)",
+            )
+            
+            preview_mode = gr.Checkbox(
+                label="⚡ Chế độ Preview Nhanh (Render ~15s, 360p, 15 FPS)",
+                value=False,
+            )
+            
+            with gr.Accordion("⚙️ Cấu hình nâng cao (Camera & Chuyển cảnh)", open=False, elem_classes=["gr-accordion"]):
+                intensity = gr.Slider(
+                    label="🎥 Cường độ Camera Motion (zoom/pan)",
+                    minimum=0.0,
+                    maximum=0.15,
+                    value=0.08,
+                    step=0.01,
+                )
+                transition_dur = gr.Slider(
+                    label="✨ Thời gian Transition (giây)",
+                    minimum=0.2,
+                    maximum=1.5,
+                    value=0.8,
+                    step=0.1,
+                )
+            
+            render_btn = gr.Button("🎬 Bắt đầu Tạo Video", variant="primary", elem_classes=["btn-primary"], size="lg")
+            
+            gr.HTML("<div style='margin-top: 24px; margin-bottom: 8px; font-weight: 500; color: #e2e8f0;'>🎞️ Kết quả Video & Tiến trình</div>")
+            video_output = gr.Video(label=None, height=350)
+            render_log = gr.Textbox(
+                label="📋 Tiến trình Render (real-time console)",
+                lines=5,
+                interactive=False,
+                autoscroll=True,
+                elem_classes=["console-log"],
+            )
 
     # ── Events ──────────────────────────────────────────────────────────────
     analyze_btn.click(
         fn=analyze_timestamps,
         inputs=[api_key, audio_input, scenes_input, language],
-        outputs=[timestamp_table, analyze_log],
+        outputs=[timestamp_table],
     )
 
     update_btn.click(
         fn=sync_timestamps,
         inputs=[timestamp_table, api_key, audio_input, scenes_input, language],
-        outputs=[update_log, timestamp_table],
+        outputs=[timestamp_table],
+    )
+
+    preview_mode.change(
+        fn=_save_preview_mode_cache,
+        inputs=[preview_mode],
+        outputs=[],
     )
 
     clear_cache_btn.click(
         fn=_clear_cache,
         inputs=[],
-        outputs=[api_key, audio_input, scenes_input, language, update_log, timestamp_table],
+        outputs=[api_key, audio_input, scenes_input, language, timestamp_table, preview_mode],
     )
 
     render_btn.click(
         fn=render_video,
-        inputs=[audio_input, image_files, resolution, intensity, transition_dur],
+        inputs=[audio_input, image_files, resolution, intensity, transition_dur, preview_mode],
         outputs=[video_output, render_log],
         show_progress=True,
     )
@@ -444,7 +646,7 @@ with gr.Blocks(title="Auto Video Generator", theme=gr.themes.Soft()) as demo:
     demo.load(
         fn=load_cached_state,
         inputs=[],
-        outputs=[api_key, audio_input, scenes_input, language, timestamp_table],
+        outputs=[api_key, audio_input, scenes_input, language, timestamp_table, preview_mode],
     )
 
 

@@ -13,6 +13,7 @@ import os
 import math
 import random
 import numpy as np
+import cv2
 from PIL import Image
 from moviepy.editor import (
     AudioFileClip,
@@ -102,16 +103,17 @@ def _make_vignette(w: int, h: int, strength: float = VIGNETTE_STRENGTH) -> np.nd
 # Cover resize
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _cover_resize(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Resize ảnh kiểu cover: lấp đầy khung, crop phần thừa ở giữa."""
-    img_w, img_h = img.size
+def _cover_resize(img: Image.Image, target_w: int, target_h: int) -> np.ndarray:
+    """Resize ảnh kiểu cover sử dụng OpenCV: lấp đầy khung, crop phần thừa ở giữa."""
+    img_array = np.array(img)
+    img_h, img_w = img_array.shape[:2]
     scale = max(target_w / img_w, target_h / img_h)
     new_w = int(math.ceil(img_w * scale))
     new_h = int(math.ceil(img_h * scale))
-    img = img.resize((new_w, new_h), Image.LANCZOS)
+    resized = cv2.resize(img_array, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
     left = (new_w - target_w) // 2
     top  = (new_h - target_h) // 2
-    return img.crop((left, top, left + target_w, top + target_h))
+    return resized[top:top+target_h, left:left+target_w]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,7 +242,7 @@ def _pick_preset(scene_index: int, prev_preset_idx: int = -1) -> tuple[int, dict
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _camera_motion_frame(
-    img_pil: Image.Image,
+    img_array: np.ndarray,
     out_w: int, out_h: int,
     progress: float,          # 0.0 → 1.0 (raw, chưa eased)
     preset: dict,             # camera preset dict
@@ -248,9 +250,9 @@ def _camera_motion_frame(
 ) -> np.ndarray:
     """
     Render một frame với camera motion theo preset đã chọn.
-    Sử dụng PIL crop và resize trực tiếp để tránh overhead tạo Image từ array mỗi frame.
+    Sử dụng numpy slicing và cv2.resize để có hiệu năng cực đại.
     """
-    img_w, img_h = img_pil.size
+    img_h, img_w = img_array.shape[:2]
 
     easing_fn = _EASING_FNS.get(preset["easing"], _smoothstep)
     p = easing_fn(progress)
@@ -277,15 +279,14 @@ def _camera_motion_frame(
     x0 = max(0, min(x0, max_x))
     y0 = max(0, min(y0, max_y))
 
-    # PIL lazy crop
-    cropped = img_pil.crop((x0, y0, x0 + crop_w, y0 + crop_h))
+    # Numpy crop
+    cropped = img_array[y0:y0+crop_h, x0:x0+crop_w]
     
     # TỐI ƯU: Nếu kích thước vùng crop trùng với output size (scale = 1.0), không cần resize
     if crop_w == out_w and crop_h == out_h:
-        return np.array(cropped)
+        return cropped
 
-    resized = cropped.resize((out_w, out_h), Image.BILINEAR)
-    return np.array(resized)
+    return cv2.resize(cropped, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -301,6 +302,7 @@ def make_camera_motion_clip(
     prev_preset_idx: int = -1,
     intensity: float = 0.08,
     vignette: np.ndarray = None,
+    fps: int = FPS,
 ) -> tuple["ImageClip", int]:
     """
     Tạo clip ảnh với Camera Motion effect.
@@ -314,14 +316,12 @@ def make_camera_motion_clip(
     """
     img = Image.open(image_path).convert("RGB")
     # ─ Bước 1: Pre-resize về output size với LANCZOS (1 lần, chất lượng cao)
-    img = _cover_resize(img, out_w, out_h)
-    img_array = np.array(img, dtype=np.uint8)
+    img_array = _cover_resize(img, out_w, out_h)
 
-    # ─ Bước 2: Pre-bake vignette vào ảnh (1 lần) -> convert sang PIL
+    # ─ Bước 2: Pre-bake vignette vào ảnh (1 lần)
     if vignette is None:
         vignette = np.full((out_h, out_w, 1), 255, dtype=np.uint8)
     img_array = ((img_array.astype(np.uint16) * vignette) >> 8).astype(np.uint8)
-    img_pil = Image.fromarray(img_array)
 
     # Chọn preset
     preset_idx, preset = _pick_preset(scene_index, prev_preset_idx)
@@ -335,7 +335,7 @@ def make_camera_motion_clip(
         target_scale_w = int(round(out_w * scale))
         target_scale_h = int(round(out_h * scale))
         if target_scale_w != out_w or target_scale_h != out_h:
-            img_pil = img_pil.resize((target_scale_w, target_scale_h), Image.LANCZOS)
+            img_array = cv2.resize(img_array, (target_scale_w, target_scale_h), interpolation=cv2.INTER_LANCZOS4)
         # Thiết lập lại mức zoom bằng 0 để hàm render frame bỏ qua bước resize tiếp theo
         preset["zoom_s"] = 0.0
         preset["zoom_e"] = 0.0
@@ -354,7 +354,7 @@ def make_camera_motion_clip(
             return last_frame
 
         frame = _camera_motion_frame(
-            img_pil, out_w, out_h,
+            img_array, out_w, out_h,
             progress,
             preset,
             intensity,
@@ -365,7 +365,7 @@ def make_camera_motion_clip(
 
     clip = ImageClip(make_frame(0), duration=clip_duration)
     clip = clip.fl(lambda gf, t: make_frame(t))
-    clip = clip.set_fps(FPS)
+    clip = clip.set_fps(fps)
     return clip, preset_idx
 
 
@@ -382,6 +382,7 @@ def build_video(
     ken_burns_intensity: float = 0.08,
     transition_dur: float = 0.6,
     progress_callback=None,
+    preview_mode: bool = False,
 ) -> str:
     """
     Dựng video theo thuật toán timeline-based với gối chồng (overlap) phân cảnh:
@@ -389,9 +390,23 @@ def build_video(
       2. Tính toán trước transition fade duration cho từng chuyển tiếp
       3. Mỗi clip_i kéo dài từ scene_i.start đến [scene_i+1.start + fade_durs[i+1]]
       4. Clip sau đè lên đuôi clip trước bằng crossfadein tạo hiệu ứng chuyển tiếp hoàn hảo
-      5. Ghi file mp4 với FFMPEG preset ultrafast và bitrate tối ưu 3500k để render cực nhanh
+      5. Ghi file mp4 với FFMPEG sử dụng Intel QSV (hoặc CPU libx264 fallback)
     """
-    out_w, out_h = RESOLUTIONS.get(resolution, RESOLUTIONS["portrait_9_16"])
+    if preview_mode:
+        raw_w, raw_h = RESOLUTIONS.get(resolution, RESOLUTIONS["portrait_9_16"])
+        if raw_w <= raw_h:
+            out_w = 360
+            out_h = int(round(360 * raw_h / raw_w))
+            out_h = (out_h // 2) * 2
+        else:
+            out_h = 360
+            out_w = int(round(360 * raw_w / raw_h))
+            out_w = (out_w // 2) * 2
+        fps = 15
+    else:
+        out_w, out_h = RESOLUTIONS.get(resolution, RESOLUTIONS["portrait_9_16"])
+        fps = FPS
+
     n = len(matched_scenes)
     scenes = list(matched_scenes)  # copy để tránh mutate
 
@@ -458,6 +473,7 @@ def build_video(
             prev_preset_idx=prev_preset_idx,
             intensity=ken_burns_intensity,
             vignette=vignette,
+            fps=fps,
         )
 
         # Đặt vị trí tuyệt đối trên timeline
@@ -492,20 +508,34 @@ def build_video(
     video = video.set_audio(audio)
 
     # ── 9. Export ─────────────────────────────────────────────────────────────
-    _prog("Đang render MP4 (sử dụng tối ưu hóa tốc độ)...", 75)
+    _prog("Đang render MP4...", 75)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    video.write_videofile(
-        output_path,
-        fps=FPS,
-        codec="libx264",
-        audio_codec="aac",
-        preset="ultrafast",   # ultrafast nhanh gấp 2-3x so với fast/medium
-        bitrate="3500k",     # bitrate tối ưu 3500k giảm đáng kể thời gian nén ảnh
-        threads=0,           # tự động phát hiện số nhân CPU
-        verbose=False,
-        logger=None,
-    )
+    try:
+        # Thử sử dụng Intel QSV để encode tăng tốc phần cứng GPU
+        video.write_videofile(
+            output_path,
+            fps=fps,
+            codec="h264_qsv",
+            audio_codec="aac",
+            bitrate="3500k",
+            threads=0,
+            verbose=False,
+            logger=None,
+        )
+    except Exception as e:
+        print(f"QSV failed ({e}). Falling back to libx264 CPU...")
+        video.write_videofile(
+            output_path,
+            fps=fps,
+            codec="libx264",
+            audio_codec="aac",
+            preset="ultrafast",
+            bitrate="3500k",
+            threads=0,
+            verbose=False,
+            logger=None,
+        )
 
     video.close()
     audio.close()
