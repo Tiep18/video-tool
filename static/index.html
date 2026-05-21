@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎬 Auto Video Generator — Premium UI</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- CSS Style -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">🎬</span>
+                <div class="logo-text">
+                    <h1>Auto Video Generator</h1>
+                    <p>Hệ thống tự động biên tập và dựng video phân cảnh AI</p>
+                </div>
+            </div>
+            <div class="header-status">
+                <span class="status-indicator online"></span>
+                <span class="status-label">Hệ thống sẵn sàng</span>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="app-workspace">
+            
+            <!-- COLUMN 1: BƯỚC 1 -->
+            <section class="workspace-column" id="col-analysis">
+                <div class="column-header">
+                    <span class="step-badge">01</span>
+                    <h2>PHÂN TÍCH & CẤU HÌNH</h2>
+                </div>
+                <div class="column-body">
+                    <!-- OpenAI API Key -->
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>🔑 OpenAI API Key</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group">
+                                <input type="password" id="api-key" placeholder="sk-proj-..." class="form-input">
+                                <span class="input-info">API Key dùng để nhận dạng giọng nói bằng Whisper.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Audio Input -->
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>🎵 File Audio Voiceover</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="drag-drop-zone" id="audio-dropzone">
+                                <div class="zone-icon">🎙️</div>
+                                <div class="zone-text">Kéo thả file Audio hoặc click để chọn</div>
+                                <input type="file" id="audio-file" accept="audio/*" class="file-hidden">
+                            </div>
+                            <div class="file-preview-card hidden" id="audio-preview-card">
+                                <div class="file-preview-icon">🎵</div>
+                                <div class="file-preview-info">
+                                    <span class="file-name" id="audio-name">audio.mp3</span>
+                                    <span class="file-size" id="audio-size">0.0 MB</span>
+                                </div>
+                                <button class="file-remove-btn" id="remove-audio-btn">×</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Language Selection -->
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>🌐 Ngôn ngữ Whisper</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="segmented-control">
+                                <label class="segment-option">
+                                    <input type="radio" name="language" value="Tiếng Việt" checked>
+                                    <span>Tiếng Việt</span>
+                                </label>
+                                <label class="segment-option">
+                                    <input type="radio" name="language" value="English">
+                                    <span>English</span>
+                                </label>
+                                <label class="segment-option">
+                                    <input type="radio" name="language" value="Tự động">
+                                    <span>Tự động</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Scenes Input -->
+                    <div class="card glass flex-grow">
+                        <div class="card-header">
+                            <h3>📋 Danh sách phân cảnh</h3>
+                        </div>
+                        <div class="card-body flex-col">
+                            <textarea id="scenes-input" placeholder="Nhập nội dung phân cảnh lời thoại...&#10;Mỗi dòng là một phân cảnh độc lập." class="form-textarea flex-grow"></textarea>
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="action-buttons-group">
+                        <button class="btn btn-primary" id="btn-analyze">
+                            <span class="btn-icon">🔍</span> Phân tích Timestamps
+                        </button>
+                        <button class="btn btn-stop" id="btn-clear-cache">
+                            <span class="btn-icon">🗑️</span> Xóa Cache & Tạm
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- COLUMN 2: BƯỚC 2 -->
+            <section class="workspace-column" id="col-timeline">
+                <div class="column-header">
+                    <span class="step-badge">02</span>
+                    <h2>BIÊN TẬP TIMELINE</h2>
+                    <div class="export-toolbar hidden" id="export-toolbar">
+                        <button class="btn-export" data-format="srt">SRT</button>
+                        <button class="btn-export" data-format="json">JSON</button>
+                        <button class="btn-export" data-format="csv">CSV</button>
+                    </div>
+                </div>
+                <div class="column-body">
+                    <!-- Timeline Card List -->
+                    <div class="timeline-container" id="timeline-list">
+                        <!-- Trạng thái trống -->
+                        <div class="empty-state">
+                            <div class="empty-icon">📊</div>
+                            <p>Chưa có dữ liệu phân tích.</p>
+                            <p class="sub">Hãy thực hiện Bước 1 để tự động tạo và điều chỉnh Timestamps.</p>
+                        </div>
+                    </div>
+
+                    <!-- Save changes button -->
+                    <div class="timeline-footer hidden" id="timeline-footer">
+                        <button class="btn btn-secondary w-full" id="btn-sync">
+                            <span class="btn-icon">🔄</span> Cập nhật & Đồng bộ thay đổi
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- COLUMN 3: BƯỚC 3 -->
+            <section class="workspace-column" id="col-rendering">
+                <div class="column-header">
+                    <span class="step-badge">03</span>
+                    <h2>DỰNG & RENDER VIDEO</h2>
+                </div>
+                <div class="column-body">
+                    <!-- Image Files Input -->
+                    <div class="card glass">
+                        <div class="card-header">
+                            <h3>🖼️ Ảnh phân cảnh</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="drag-drop-zone" id="images-dropzone">
+                                <div class="zone-icon">📸</div>
+                                <div class="zone-text">Kéo thả nhiều ảnh hoặc click để chọn</div>
+                                <input type="file" id="image-files" accept="image/*" multiple class="file-hidden">
+                            </div>
+                            <!-- Image Thumbnails Grid -->
+                            <div class="thumbnails-grid hidden" id="thumbnails-grid"></div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Accordion -->
+                    <div class="card glass">
+                        <div class="card-header accordion-toggle" id="settings-toggle">
+                            <h3>⚙️ Cấu hình dựng video</h3>
+                            <span class="accordion-arrow">▼</span>
+                        </div>
+                        <div class="card-body accordion-content" id="settings-content">
+                            <!-- Aspect Ratio -->
+                            <div class="settings-group">
+                                <label class="setting-label">📐 Tỉ lệ khung hình</label>
+                                <div class="segmented-control">
+                                    <label class="segment-option">
+                                        <input type="radio" name="resolution" value="Dọc 9:16 (TikTok/Reels)" checked>
+                                        <span>Dọc 9:16</span>
+                                    </label>
+                                    <label class="segment-option">
+                                        <input type="radio" name="resolution" value="Ngang 16:9 (YouTube)">
+                                        <span>Ngang 16:9</span>
+                                    </label>
+                                    <label class="segment-option">
+                                        <input type="radio" name="resolution" value="Vuông 1:1 (Instagram)">
+                                        <span>Vuông 1:1</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <!-- Preview Mode Toggle -->
+                            <div class="settings-group toggle-group">
+                                <div class="toggle-info">
+                                    <label class="setting-label m-0">⚡ Chế độ Preview Nhanh</label>
+                                    <span class="toggle-desc">Render ở 360p, 15 FPS (tiết kiệm thời gian)</span>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="preview-mode">
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+
+                            <!-- Sliders -->
+                            <div class="settings-group">
+                                <div class="slider-header">
+                                    <label class="setting-label">🎥 Cường độ Camera Motion (zoom/pan)</label>
+                                    <span class="slider-value" id="intensity-val">0.08</span>
+                                </div>
+                                <input type="range" id="intensity" min="0.0" max="0.15" value="0.08" step="0.01" class="form-slider">
+                            </div>
+
+                            <div class="settings-group">
+                                <div class="slider-header">
+                                    <label class="setting-label">✨ Thời gian Transition (giây)</label>
+                                    <span class="slider-value" id="transition-val">0.8</span>
+                                </div>
+                                <input type="range" id="transition" min="0.2" max="1.5" value="0.8" step="0.1" class="form-slider">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Render Action Button -->
+                    <button class="btn btn-primary btn-lg w-full" id="btn-render">
+                        <span class="btn-icon">🎬</span> Bắt đầu Tạo Video
+                    </button>
+
+                    <!-- Render Progress & Console -->
+                    <div class="card glass hidden" id="render-status-card">
+                        <div class="card-header">
+                            <h3>🎞️ Tiến trình Render</h3>
+                        </div>
+                        <div class="card-body">
+                            <!-- Progress Bar -->
+                            <div class="progress-container">
+                                <div class="progress-bar-wrapper">
+                                    <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+                                </div>
+                                <div class="progress-info">
+                                    <span class="progress-step-text" id="progress-step">Đang chờ lệnh...</span>
+                                    <span class="progress-percent-text" id="progress-percent">0%</span>
+                                </div>
+                            </div>
+
+                            <!-- Console Log -->
+                            <div class="console-wrapper">
+                                <div class="console-header">
+                                    <span>TERMINAL LOGS</span>
+                                    <button class="btn-console-clear" id="btn-clear-logs">Xóa logs</button>
+                                </div>
+                                <pre class="console-body" id="console-logs">Console initialized...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Video Result Player -->
+                    <div class="card glass hidden" id="video-result-card">
+                        <div class="card-header">
+                            <h3>🎥 Video Kết quả</h3>
+                        </div>
+                        <div class="card-body">
+                            <video id="video-player" controls class="result-video-player"></video>
+                            <a id="btn-download-video" href="#" download class="btn btn-secondary w-full mt-10">
+                                ⬇️ Tải xuống Video (.mp4)
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- Script Application -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

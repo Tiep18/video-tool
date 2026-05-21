@@ -57,3 +57,7 @@ logs/
 
 # ── Local UI Cache ────────────────────────────────────────────────────────────
 cache_state.json
+
+# ── Local uploads & outputs ───────────────────────────────────────────────────
+uploads/
+static/outputs/
