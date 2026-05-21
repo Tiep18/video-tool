@@ -41,6 +41,7 @@ body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    overflow: hidden;
 }
 
 .app-header {
@@ -110,6 +111,7 @@ body {
 .app-workspace {
     display: grid;
     grid-template-columns: 380px 1fr 430px;
+    grid-template-rows: 100%;
     flex-grow: 1;
     overflow: hidden;
     min-height: 0;
@@ -123,6 +125,7 @@ body {
     overflow: hidden;
     min-height: 0;
     height: 100%;
+    max-height: 100%;
 }
 
 .workspace-column:last-child {
@@ -167,6 +170,7 @@ body {
     padding: 16px;
     overflow-y: auto;
     flex-grow: 1;
+    min-height: 0;
 }
 
 #col-timeline .column-body {
