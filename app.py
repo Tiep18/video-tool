@@ -8,10 +8,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-import matplotlib
-matplotlib.use("Agg")           # non-interactive backend cho server
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+# matplotlib removed to optimize UI/UX space and performance
 
 import gradio as gr
 
@@ -26,71 +23,69 @@ _matched_scenes: list[dict] = []
 _sorted_images:  list[str]  = []
 _progress_log:   list[str]  = []
 
+CACHE_FILE = "cache_state.json"
 
-# ── Timeline Gantt chart ───────────────────────────────────────────────────────
 
-def _build_timeline_fig():
-    """Tạo Gantt chart từ _matched_scenes. Trả về matplotlib Figure."""
-    if not _matched_scenes:
-        return None
+def _save_cache(api_key, audio_path, scenes_text, language):
+    global _matched_scenes
+    try:
+        data = {
+            "api_key": api_key,
+            "audio_path": audio_path,
+            "scenes_text": scenes_text,
+            "language": language,
+            "matched_scenes": _matched_scenes
+        }
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Lỗi lưu cache: {e}")
 
-    n        = len(_matched_scenes)
-    fig_h    = max(4, n * 0.6 + 1.5)
-    fig, ax  = plt.subplots(figsize=(14, fig_h))
-    fig.patch.set_facecolor("#0f172a")
-    ax.set_facecolor("#1e293b")
 
-    max_time = max(s["end"] for s in _matched_scenes) * 1.04
-
-    for i, scene in enumerate(_matched_scenes):
-        pct   = scene["match_pct"]
-        y     = n - 1 - i          # scene 1 ở trên cùng
-        color = "#4ade80" if pct >= 60 else "#fb923c" if pct >= 30 else "#f87171"
-        glow  = "#166534" if pct >= 60 else "#92400e" if pct >= 30 else "#7f1d1d"
-
-        # Shadow / glow
-        ax.barh(y, scene["duration"], left=scene["start"], height=0.75,
-                color=glow, alpha=0.35, linewidth=0)
-        # Main bar
-        ax.barh(y, scene["duration"], left=scene["start"], height=0.6,
-                color=color, alpha=0.92, edgecolor="white", linewidth=0.4)
-
-        # Label bên trong bar
-        label = f"#{scene['screen']}  {pct}%"
-        ax.text(
-            scene["start"] + scene["duration"] / 2, y, label,
-            ha="center", va="center", fontsize=7.5,
-            fontweight="bold", color="white", fontfamily="monospace",
-        )
-
-    # Axes styling
-    ax.set_yticks(range(n))
-    ax.set_yticklabels(
-        [f"Scene {s['screen']}" for s in reversed(_matched_scenes)],
-        fontsize=8, color="#cbd5e1",
+def _clear_cache():
+    global _matched_scenes
+    _matched_scenes = []
+    if os.path.exists(CACHE_FILE):
+        try:
+            os.remove(CACHE_FILE)
+        except Exception:
+            pass
+    return (
+        "",          # api_key
+        None,        # audio_input
+        "",          # scenes_input
+        "Tiếng Việt", # language
+        "🗑️ Đã xóa cache thành công.", # update_log
+        None,        # timestamp_table
     )
-    ax.set_xlim(0, max_time)
-    ax.set_xlabel("Thời gian (giây)", color="#94a3b8", fontsize=9)
-    ax.set_title("📊 Timeline Phân Cảnh", color="white", fontsize=12,
-                 fontweight="bold", pad=12)
-    ax.tick_params(axis="x", colors="#94a3b8", labelsize=8)
-    ax.tick_params(axis="y", colors="#cbd5e1")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#334155")
-    ax.grid(axis="x", color="#334155", linewidth=0.5, linestyle="--", alpha=0.6)
 
-    # Legend
-    legend_elements = [
-        mpatches.Patch(facecolor="#4ade80", label="✅ Tốt (≥60%)"),
-        mpatches.Patch(facecolor="#fb923c", label="⚠️ Trung bình (30-60%)"),
-        mpatches.Patch(facecolor="#f87171", label="❌ Kém (<30%)"),
-    ]
-    ax.legend(handles=legend_elements, loc="lower right",
-              facecolor="#1e293b", edgecolor="#334155",
-              labelcolor="#cbd5e1", fontsize=8)
 
-    plt.tight_layout()
-    return fig
+def load_cached_state():
+    global _matched_scenes
+    if not os.path.exists(CACHE_FILE):
+        return "", None, "", "Tiếng Việt", None
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        _matched_scenes = data.get("matched_scenes", [])
+        api_key = data.get("api_key", "")
+        audio_path = data.get("audio_path", None)
+        if audio_path and not os.path.exists(audio_path):
+            audio_path = None
+        
+        scenes_text = data.get("scenes_text", "")
+        language = data.get("language", "Tiếng Việt")
+        
+        table = results_to_table(_matched_scenes) if _matched_scenes else None
+        
+        return api_key, audio_path, scenes_text, language, table
+    except Exception as e:
+        print(f"Lỗi load cache: {e}")
+        return "", None, "", "Tiếng Việt", None
+
+
+# _build_timeline_fig was removed since the timeline plot is no longer needed.
 
 
 # ── Step 1: Phân tích timestamp ───────────────────────────────────────────────
@@ -120,18 +115,20 @@ def analyze_timestamps(api_key, audio_path, scenes_text, language):
         good = sum(1 for m in _matched_scenes if m["match_pct"] >= 60)
         log += f"✓ Xong! {good}/{len(_matched_scenes)} phân cảnh khớp tốt (≥60%)\n"
 
+        # Ghi cache cục bộ
+        _save_cache(api_key, audio_path, scenes_text, language)
+
         table = results_to_table(_matched_scenes)
-        fig   = _build_timeline_fig()
-        return table, log, fig
+        return table, log
 
     except Exception as e:
-        return None, f"❌ Lỗi: {str(e)}", None
+        return None, f"❌ Lỗi: {str(e)}"
 
 
 # ── Sync timestamp từ bảng đã edit ───────────────────────────────────────────
 
-def sync_timestamps(table):
-    """Đọc bảng đã edit, cập nhật _matched_scenes, vẽ lại timeline."""
+def sync_timestamps(table, api_key, audio_path, scenes_text, language):
+    """Đọc bảng đã edit, cập nhật _matched_scenes, vẽ lại timeline và lưu cache."""
     global _matched_scenes
 
     if not _matched_scenes or table is None:
@@ -153,12 +150,14 @@ def sync_timestamps(table):
                 _matched_scenes[i]["duration"] = round(end - start, 2)
                 updated += 1
 
+        # Ghi cache sau khi sync
+        _save_cache(api_key, audio_path, scenes_text, language)
+
         new_table = results_to_table(_matched_scenes)
-        fig       = _build_timeline_fig()
-        return f"✅ Đã cập nhật {updated} dòng.", new_table, fig
+        return f"✅ Đã cập nhật {updated} dòng.", new_table
 
     except Exception as e:
-        return f"❌ Lỗi: {e}", gr.update(), gr.update()
+        return f"❌ Lỗi: {e}", gr.update()
 
 
 # ── Step 2: Render video ──────────────────────────────────────────────────────
@@ -171,18 +170,23 @@ def render_video(
     transition_dur,
     progress=gr.Progress(track_tqdm=True),
 ):
+    """Generator function — yield (video_path, log_text) từng bước để cập nhật UI real-time."""
     global _matched_scenes
 
     if not _matched_scenes:
-        return None, "❌ Chưa có dữ liệu timestamp. Hãy chạy 'Phân tích' trước."
+        yield None, "❌ Chưa có dữ liệu timestamp. Hãy chạy 'Phân tích' trước."
+        return
     if not audio_path:
-        return None, "❌ Thiếu file audio."
+        yield None, "❌ Thiếu file audio."
+        return
     if not image_files:
-        return None, "❌ Chưa upload ảnh."
+        yield None, "❌ Chưa upload ảnh."
+        return
 
     image_paths = sort_images([f.name for f in image_files])
     if not image_paths:
-        return None, "❌ Không tìm thấy ảnh hợp lệ (png/jpg/webp)."
+        yield None, "❌ Không tìm thấy ảnh hợp lệ (png/jpg/webp)."
+        return
 
     warnings = validate_inputs(image_paths, _matched_scenes)
     warn_str = "\n".join(warnings) + "\n" if warnings else ""
@@ -196,28 +200,56 @@ def render_video(
     output_path = os.path.join(tempfile.gettempdir(), "video_tool_output.mp4")
     log_lines   = [warn_str + "→ Bắt đầu render video..."]
 
+    # Dùng threading để build_video chạy song song với việc yield log
+    import queue as _queue
+    _q = _queue.Queue()
+    _result = [None]
+    _error  = [None]
+
     def on_progress(step, pct):
-        log_lines.append(f"[{pct:3d}%] {step}")
+        _q.put((step, pct))
         progress(pct / 100, desc=step)
 
-    try:
-        result  = build_video(
-            matched_scenes=_matched_scenes,
-            image_paths=image_paths,
-            audio_path=audio_path,
-            output_path=output_path,
-            resolution=resolution,
-            ken_burns_intensity=float(intensity),
-            transition_dur=float(transition_dur),
-            progress_callback=on_progress,
-        )
-        size_mb = os.path.getsize(result) / 1024 / 1024
-        log_lines.append(f"✓ File: {result} ({size_mb:.1f} MB)")
-        return result, "\n".join(log_lines)
+    def _worker():
+        try:
+            _result[0] = build_video(
+                matched_scenes=_matched_scenes,
+                image_paths=image_paths,
+                audio_path=audio_path,
+                output_path=output_path,
+                resolution=resolution,
+                ken_burns_intensity=float(intensity),
+                transition_dur=float(transition_dur),
+                progress_callback=on_progress,
+            )
+        except Exception as e:
+            _error[0] = str(e)
+        finally:
+            _q.put(None)  # sentinel
 
-    except Exception as e:
-        log_lines.append(f"❌ Lỗi render: {str(e)}")
-        return None, "\n".join(log_lines)
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    # Stream log từng bước về UI
+    while True:
+        item = _q.get()
+        if item is None:
+            break
+        step, pct = item
+        log_lines.append(f"[{pct:3d}%] {step}")
+        yield None, "\n".join(log_lines)
+
+    t.join()
+
+    if _error[0]:
+        log_lines.append(f"❌ Lỗi render: {_error[0]}")
+        yield None, "\n".join(log_lines)
+        return
+
+    result = _result[0]
+    size_mb = os.path.getsize(result) / 1024 / 1024
+    log_lines.append(f"✅ Hoàn tất! File: {result} ({size_mb:.1f} MB)")
+    yield result, "\n".join(log_lines)
 
 
 # ── Export helpers ────────────────────────────────────────────────────────────
@@ -266,161 +298,156 @@ def export_srt():
 
 DESCRIPTION = """
 # 🎬 Auto Video Generator
-**Tự động tạo video từ ảnh phân cảnh + audio voiceover bằng OpenAI Whisper**
-
-**Quy trình:** Upload audio + ảnh + text phân cảnh → Phân tích timestamp → Tạo video
-"""
-
-STEP1_INFO = """
-### Bước 1: Phân tích Timestamp
-Whisper sẽ nhận dạng audio và xác định thời điểm bắt đầu/kết thúc từng phân cảnh.
-"""
-
-STEP2_INFO = """
-### Bước 2: Tạo Video
-Ghép ảnh + audio theo timestamp, thêm Ken Burns effect và crossfade transition.
-
-**Tên file ảnh:** `001_text.png`, `002_text.png`... (sort theo số prefix)
+**Tự động tạo video từ ảnh phân cảnh + audio voiceover sử dụng OpenAI Whisper**
 """
 
 with gr.Blocks(title="Auto Video Generator", theme=gr.themes.Soft()) as demo:
     gr.Markdown(DESCRIPTION)
 
-    # ── Bước 1 ──────────────────────────────────────────────────────────────
-    gr.Markdown(STEP1_INFO)
+    with gr.Tabs():
+        with gr.Tab("⚙️ Bước 1: Phân tích & Biên tập Timestamp"):
+            with gr.Row():
+                with gr.Column(scale=4):
+                    gr.Markdown("### 📥 Cấu hình đầu vào")
+                    api_key = gr.Textbox(
+                        label="🔑 OpenAI API Key",
+                        placeholder="sk-...",
+                        type="password",
+                        info="Chỉ lưu trữ trong phiên làm việc hiện tại.",
+                    )
+                    audio_input = gr.Audio(
+                        label="🎵 File Audio Voiceover",
+                        type="filepath",
+                        sources=["upload"],
+                    )
+                    language = gr.Radio(
+                        label="🌐 Ngôn ngữ nhận dạng giọng nói",
+                        choices=["Tiếng Việt", "English", "Tự động"],
+                        value="Tiếng Việt",
+                    )
+                    scenes_input = gr.Textbox(
+                        label="📋 Danh sách phân cảnh (mỗi dòng 1 câu)",
+                        placeholder="Nhập nội dung các phân cảnh ở đây...",
+                        lines=8,
+                    )
+                    with gr.Row():
+                        analyze_btn = gr.Button("🔍 Phân tích Timestamp", variant="primary", scale=2)
+                        clear_cache_btn = gr.Button("🗑️ Xóa Cache", variant="stop", scale=1)
+                    
+                    analyze_log = gr.Textbox(label="Nhật ký phân tích", lines=3, interactive=False)
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            api_key = gr.Textbox(
-                label="🔑 OpenAI API Key",
-                placeholder="sk-...",
-                type="password",
-                info="Key không được lưu lại, chỉ dùng trong session này.",
-            )
-            audio_input = gr.Audio(
-                label="🎵 File Audio",
-                type="filepath",
-                sources=["upload"],
-            )
-            language = gr.Radio(
-                label="🌐 Ngôn ngữ audio",
-                choices=["Tiếng Việt", "English", "Tự động"],
-                value="Tiếng Việt",
-            )
+                with gr.Column(scale=5):
+                    gr.Markdown("### 📊 Kết quả Phân cảnh & Biên tập")
+                    gr.Markdown(
+                        "**💡 Hướng dẫn:** Bạn có thể chỉnh sửa trực tiếp thời gian **Bắt đầu** / **Kết thúc** "
+                        "trên bảng (nhập số giây hoặc định dạng `MM:SS.ss`), sau đó nhấn nút **Cập nhật** bên dưới."
+                    )
+                    timestamp_table = gr.Dataframe(
+                        headers=["#", "Bắt đầu", "Kết thúc", "Thời lượng", "Phân cảnh", "Khớp"],
+                        label="Bảng điều chỉnh timestamp",
+                        wrap=True,
+                        interactive=True,
+                        col_count=(6, "fixed"),
+                    )
+                    with gr.Row():
+                        update_btn = gr.Button("🔄 Cập nhật thay đổi", variant="secondary", scale=1)
+                        update_log = gr.Textbox(label="", lines=1, interactive=False, placeholder="Trạng thái cập nhật", scale=2)
+                    
+                    with gr.Accordion("⬇️ Xuất dữ liệu cấu hình / Phụ đề", open=False):
+                        with gr.Row():
+                            btn_json = gr.Button("⬇️ Xuất JSON", size="sm")
+                            btn_csv  = gr.Button("⬇️ Xuất CSV", size="sm")
+                            btn_srt  = gr.Button("⬇️ Xuất SRT Sub", size="sm")
+                        export_file = gr.File(label="Tải file đã xuất")
 
-        with gr.Column(scale=1):
-            scenes_input = gr.Textbox(
-                label="📋 Danh sách phân cảnh (mỗi dòng 1 câu)",
-                placeholder="Có những ngày bạn thấy mình ổn...\nBạn vẫn đi làm...",
-                lines=12,
-            )
+        with gr.Tab("🎬 Bước 2: Tạo & Render Video"):
+            with gr.Row():
+                with gr.Column(scale=4):
+                    gr.Markdown("### 🎥 Thiết lập Render")
+                    image_files = gr.File(
+                        label="🖼️ Tải lên ảnh phân cảnh (tên file dạng 001_..., 002_...)",
+                        file_count="multiple",
+                        file_types=["image"],
+                    )
+                    resolution = gr.Radio(
+                        label="📐 Tỉ lệ khung hình video",
+                        choices=[
+                            "Dọc 9:16 (TikTok/Reels)",
+                            "Ngang 16:9 (YouTube)",
+                            "Vuông 1:1 (Instagram)",
+                        ],
+                        value="Dọc 9:16 (TikTok/Reels)",
+                    )
+                    with gr.Accordion("⚙️ Cấu hình nâng cao (Camera & Chuyển cảnh)", open=False):
+                        intensity = gr.Slider(
+                            label="🎥 Cường độ Camera Motion (zoom/pan)",
+                            minimum=0.0,
+                            maximum=0.15,
+                            value=0.08,
+                            step=0.01,
+                            info="0 = tĩnh, 0.15 = chuyển động mạnh",
+                        )
+                        transition_dur = gr.Slider(
+                            label="✨ Thời gian Transition (giây)",
+                            minimum=0.2,
+                            maximum=1.5,
+                            value=0.8,
+                            step=0.1,
+                            info="Crossfade tối đa giữa các phân cảnh (adaptive theo khoảng lặng)",
+                        )
+                    
+                    render_btn  = gr.Button("🎬 Bắt đầu Tạo Video", variant="primary", size="lg")
+                    
+                    gr.Markdown("""
+                    **💡 Các hiệu ứng được tích hợp sẵn:**
+                    * **Camera Motion**: Tự động áp dụng ngẫu nhiên trong 10 kiểu chuyển động máy ảnh chuyên nghiệp.
+                    * **Crossfade**: Chuyển cảnh mượt mà, tự động điều chỉnh theo khoảng lặng của giọng đọc.
+                    * **Vignette**: Tạo viền tối cinematic chất lượng cao.
+                    """)
 
-    analyze_btn = gr.Button("🔍 Phân tích Timestamp", variant="primary", size="lg")
-    analyze_log = gr.Textbox(label="Log phân tích", lines=4, interactive=False)
-
-    # ── Bảng kết quả — có thể edit cột Bắt đầu / Kết thúc ──────────────────
-    gr.Markdown(
-        "**💡 Tip:** Bạn có thể double-click vào ô **Bắt đầu** / **Kết thúc** "
-        "để sửa thủ công (định dạng `MM:SS.ss`), sau đó nhấn **Cập nhật**."
-    )
-    timestamp_table = gr.Dataframe(
-        headers=["#", "Bắt đầu", "Kết thúc", "Thời lượng", "Phân cảnh", "Khớp"],
-        label="📊 Kết quả Timestamp",
-        wrap=True,
-        interactive=True,
-        col_count=(6, "fixed"),
-    )
-
-    with gr.Row():
-        update_btn = gr.Button("🔄 Cập nhật timestamp", variant="secondary", scale=1)
-        update_log = gr.Textbox(label="", lines=1, interactive=False, scale=3)
-
-    # ── Timeline Gantt chart ─────────────────────────────────────────────────
-    timeline_plot = gr.Plot(label="📈 Timeline phân cảnh")
-
-    # ── Export ──────────────────────────────────────────────────────────────
-    with gr.Row():
-        btn_json = gr.Button("⬇️ Tải JSON")
-        btn_csv  = gr.Button("⬇️ Tải CSV")
-        btn_srt  = gr.Button("⬇️ Tải SRT")
-    with gr.Row():
-        dl_json = gr.File(label="JSON")
-        dl_csv  = gr.File(label="CSV")
-        dl_srt  = gr.File(label="SRT  (import vào TikTok / YouTube)")
-
-    gr.Markdown("---")
-
-    # ── Bước 2 ──────────────────────────────────────────────────────────────
-    gr.Markdown(STEP2_INFO)
-
-    with gr.Row():
-        with gr.Column(scale=1):
-            image_files = gr.File(
-                label="🖼️ Upload ảnh phân cảnh",
-                file_count="multiple",
-                file_types=["image"],
-            )
-            resolution = gr.Radio(
-                label="📐 Tỉ lệ video",
-                choices=[
-                    "Dọc 9:16 (TikTok/Reels)",
-                    "Ngang 16:9 (YouTube)",
-                    "Vuông 1:1 (Instagram)",
-                ],
-                value="Dọc 9:16 (TikTok/Reels)",
-            )
-
-        with gr.Column(scale=1):
-            intensity = gr.Slider(
-                label="🔍 Cường độ Ken Burns (zoom)",
-                minimum=0.0,
-                maximum=0.15,
-                value=0.08,
-                step=0.01,
-                info="0 = không zoom, 0.15 = zoom mạnh",
-            )
-            transition_dur = gr.Slider(
-                label="✨ Thời gian Transition (giây)",
-                minimum=0.2,
-                maximum=1.5,
-                value=0.5,
-                step=0.1,
-                info="Thời gian crossfade giữa các phân cảnh",
-            )
-            gr.Markdown("""
-**Lưu ý:**
-- Render 1 phút video ≈ 2–4 phút xử lý
-- File ảnh cần đặt tên: `001_...png`, `002_...png`
-- Ảnh tự động scale cover theo tỉ lệ video
-""")
-
-    render_btn  = gr.Button("🎬 Tạo Video", variant="primary", size="lg")
-    render_log  = gr.Textbox(label="Log render", lines=6, interactive=False)
-    video_output = gr.Video(label="🎥 Video Output")
+                with gr.Column(scale=5):
+                    gr.Markdown("### 🎞️ Kết quả Video")
+                    video_output = gr.Video(label="Trình xem video kết quả", height=450)
+                    render_log  = gr.Textbox(label="📋 Tiến trình Render (real-time)", lines=6, interactive=False, autoscroll=True)
 
     # ── Events ──────────────────────────────────────────────────────────────
     analyze_btn.click(
         fn=analyze_timestamps,
         inputs=[api_key, audio_input, scenes_input, language],
-        outputs=[timestamp_table, analyze_log, timeline_plot],
+        outputs=[timestamp_table, analyze_log],
     )
 
     update_btn.click(
         fn=sync_timestamps,
-        inputs=[timestamp_table],
-        outputs=[update_log, timestamp_table, timeline_plot],
+        inputs=[timestamp_table, api_key, audio_input, scenes_input, language],
+        outputs=[update_log, timestamp_table],
+    )
+
+    clear_cache_btn.click(
+        fn=_clear_cache,
+        inputs=[],
+        outputs=[api_key, audio_input, scenes_input, language, update_log, timestamp_table],
     )
 
     render_btn.click(
         fn=render_video,
         inputs=[audio_input, image_files, resolution, intensity, transition_dur],
         outputs=[video_output, render_log],
+        show_progress=True,
     )
 
-    btn_json.click(fn=export_json, outputs=[dl_json])
-    btn_csv.click(fn=export_csv,  outputs=[dl_csv])
-    btn_srt.click(fn=export_srt,  outputs=[dl_srt])
+    btn_json.click(fn=export_json, outputs=[export_file])
+    btn_csv.click(fn=export_csv,  outputs=[export_file])
+    btn_srt.click(fn=export_srt,  outputs=[export_file])
+
+    # Tải lại cache khi load trang
+    demo.load(
+        fn=load_cached_state,
+        inputs=[],
+        outputs=[api_key, audio_input, scenes_input, language, timestamp_table],
+    )
 
 
 if __name__ == "__main__":
     demo.launch(inbrowser=True)
+
