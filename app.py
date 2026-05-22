@@ -8,6 +8,7 @@ import tempfile
 import threading
 import queue
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -54,11 +55,13 @@ def _load_cache_data() -> dict:
         return {}
 
 
-def _save_cache(api_key: str, audio_path: str, scenes_text: str, language: str, matched_scenes: list, preview_mode: bool = False):
+def _save_cache(api_key: str, audio_path: str, scenes_text: str, language: str, matched_scenes: list, preview_mode: bool = False, audio_speed: float = 1.0, original_audio_path: str = ""):
     try:
         data = {
             "api_key": api_key,
             "audio_path": audio_path,
+            "original_audio_path": original_audio_path or audio_path,
+            "audio_speed": audio_speed,
             "scenes_text": scenes_text,
             "language": language,
             "matched_scenes": matched_scenes,
@@ -82,6 +85,8 @@ class AnalyzeRequest(BaseModel):
 class SyncRequest(BaseModel):
     api_key: str
     audio_path: str
+    original_audio_path: Optional[str] = ""
+    audio_speed: Optional[float] = 1.0
     scenes_text: str
     language: str
     matched_scenes: List[dict]
@@ -97,6 +102,17 @@ class RenderRequest(BaseModel):
     preview_mode: bool
 
 
+class ChangeSpeedRequest(BaseModel):
+    original_audio_path: str
+    audio_path: str
+    speed: float
+    api_key: str
+    scenes_text: str
+    language: str
+    matched_scenes: List[dict]
+    preview_mode: bool = False
+
+
 # ── API Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/api/load-cache")
@@ -106,6 +122,8 @@ async def load_cache():
         return JSONResponse(content={
             "api_key": "",
             "audio_path": "",
+            "original_audio_path": "",
+            "audio_speed": 1.0,
             "audio_filename": "",
             "scenes_text": "",
             "language": "Tiếng Việt",
@@ -120,10 +138,17 @@ async def load_cache():
         image_files = [str(p.absolute()).replace("\\", "/") for p in IMAGES_DIR.glob("*") if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}]
         image_files = sort_images(image_files)
 
+    orig_path = data.get("original_audio_path", data.get("audio_path", ""))
+    filename = os.path.basename(orig_path) if orig_path else ""
+    if filename.startswith("original_"):
+        filename = filename[len("original_"):]
+
     return {
         "api_key": data.get("api_key", ""),
         "audio_path": data.get("audio_path", ""),
-        "audio_filename": os.path.basename(data.get("audio_path", "")) if data.get("audio_path") else "",
+        "original_audio_path": orig_path,
+        "audio_speed": data.get("audio_speed", 1.0),
+        "audio_filename": filename,
         "scenes_text": data.get("scenes_text", ""),
         "language": data.get("language", "Tiếng Việt"),
         "matched_scenes": data.get("matched_scenes", []),
@@ -160,14 +185,20 @@ async def upload_audio(file: UploadFile = File(...)):
         except Exception:
             pass
     
-    file_path = AUDIO_DIR / file.filename
-    with open(file_path, "wb") as buffer:
+    orig_file_path = AUDIO_DIR / f"original_{file.filename}"
+    timestamp = int(time.time())
+    proc_file_path = AUDIO_DIR / f"speed_1.00_{timestamp}_{file.filename}"
+    
+    with open(orig_file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+        
+    shutil.copyfile(orig_file_path, proc_file_path)
     
     return {
         "status": "success",
         "filename": file.filename,
-        "path": str(file_path.absolute()).replace("\\", "/")
+        "path": str(proc_file_path.absolute()).replace("\\", "/"),
+        "original_path": str(orig_file_path.absolute()).replace("\\", "/")
     }
 
 
@@ -215,13 +246,19 @@ async def analyze(req: AnalyzeRequest):
         segments, words = transcribe(req.audio_path, req.api_key.strip(), lang_code)
         matched_scenes = match_scenes(scenes, segments, words)
         
+        cache_data = _load_cache_data()
+        orig_path = cache_data.get("original_audio_path", req.audio_path)
+        speed = cache_data.get("audio_speed", 1.0)
+        
         # Ghi vào cache
         _save_cache(
             api_key=req.api_key,
             audio_path=req.audio_path,
             scenes_text=req.scenes_text,
             language=req.language,
-            matched_scenes=matched_scenes
+            matched_scenes=matched_scenes,
+            audio_speed=speed,
+            original_audio_path=orig_path
         )
         return {"status": "success", "matched_scenes": matched_scenes}
     except Exception as e:
@@ -242,11 +279,84 @@ async def sync(req: SyncRequest):
             scenes_text=req.scenes_text,
             language=req.language,
             matched_scenes=req.matched_scenes,
-            preview_mode=req.preview_mode
+            preview_mode=req.preview_mode,
+            audio_speed=req.audio_speed,
+            original_audio_path=req.original_audio_path
         )
         return {"status": "success", "matched_scenes": req.matched_scenes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/change-audio-speed")
+async def change_audio_speed(req: ChangeSpeedRequest):
+    if not req.original_audio_path or not os.path.exists(req.original_audio_path):
+        raise HTTPException(status_code=400, detail="Không tìm thấy file audio gốc để thay đổi tốc độ.")
+    
+    if req.speed < 0.5 or req.speed > 2.0:
+        raise HTTPException(status_code=400, detail="Tốc độ audio phải nằm trong khoảng từ 0.5x đến 2.0x.")
+        
+    orig_path = Path(req.original_audio_path)
+    
+    # Dọn dẹp các file speed_ cũ để tránh rác và xung đột
+    for f in AUDIO_DIR.glob("speed_*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+            
+    original_filename = orig_path.name
+    if original_filename.startswith("original_"):
+        original_filename = original_filename[len("original_"):]
+        
+    timestamp = int(time.time())
+    new_proc_path = AUDIO_DIR / f"speed_{req.speed:.2f}_{timestamp}_{original_filename}"
+    
+    try:
+        if abs(req.speed - 1.0) < 0.01:
+            shutil.copyfile(orig_path, new_proc_path)
+        else:
+            import subprocess
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(orig_path.absolute()),
+                "-filter:a", f"atempo={req.speed}",
+                str(new_proc_path.absolute())
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode != 0:
+                raise Exception(f"FFmpeg error: {res.stderr}")
+                
+        cache_data = _load_cache_data()
+        old_speed = cache_data.get("audio_speed", 1.0)
+        ratio = old_speed / req.speed
+        
+        scaled_scenes = []
+        for item in req.matched_scenes:
+            item["start"] = round(float(item["start"]) * ratio, 2)
+            item["end"] = round(float(item["end"]) * ratio, 2)
+            item["duration"] = round(item["end"] - item["start"], 2)
+            scaled_scenes.append(item)
+            
+        _save_cache(
+            api_key=req.api_key,
+            audio_path=str(new_proc_path.absolute()).replace("\\", "/"),
+            scenes_text=req.scenes_text,
+            language=req.language,
+            matched_scenes=scaled_scenes,
+            preview_mode=req.preview_mode,
+            audio_speed=req.speed,
+            original_audio_path=str(orig_path.absolute()).replace("\\", "/")
+        )
+        
+        return {
+            "status": "success",
+            "audio_path": str(new_proc_path.absolute()).replace("\\", "/"),
+            "audio_speed": req.speed,
+            "matched_scenes": scaled_scenes
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi thay đổi tốc độ audio: {str(e)}")
 
 
 @app.post("/api/render")
@@ -369,15 +479,21 @@ def export_subtitles(format: str):
 # Route chính trả về giao diện HTML
 @app.get("/")
 def get_index():
-    index_path = Path("static/index.html")
+    index_path = Path("static/dist/index.html")
     if not index_path.exists():
-        return HTMLResponse(content="<h1>Frontend index.html is missing.</h1>", status_code=404)
+        # Fallback to old static/index.html if react build doesn't exist yet
+        old_path = Path("static/index.html")
+        if old_path.exists():
+            return FileResponse(old_path)
+        return HTMLResponse(content="<h1>Frontend index.html is missing. Please run 'npm run build' inside 'frontend' folder first.</h1>", status_code=404)
     return FileResponse(index_path)
 
 
-# Mount thư mục static (CSS, JS) và thư mục uploads (để trình phát video chạy cục bộ)
+# Mount thư mục static (CSS, JS), dist (React build) và thư mục uploads (để trình phát video chạy cục bộ)
+app.mount("/dist", StaticFiles(directory="static/dist"), name="dist")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 
 if __name__ == "__main__":
