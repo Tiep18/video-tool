@@ -41,6 +41,7 @@ body {
     display: flex;
     flex-direction: column;
     height: 100vh;
+    max-height: 100vh;
     overflow: hidden;
 }
 
@@ -113,8 +114,10 @@ body {
 .app-workspace {
     display: grid;
     grid-template-columns: 380px 1fr 430px;
-    grid-template-rows: 1fr;
+    grid-template-rows: 100%;
     height: calc(100vh - 70px);
+    max-height: calc(100vh - 70px);
+    min-height: 0;
     overflow: hidden;
     box-sizing: border-box;
 }
