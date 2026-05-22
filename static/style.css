@@ -142,9 +142,11 @@ body {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 18px 20px;
+    height: 60px;
+    padding: 0 20px;
     background-color: rgba(6, 9, 19, 0.3);
     border-bottom: 1px solid var(--border-color);
+    box-sizing: border-box;
 }
 
 .step-badge {
@@ -174,8 +176,9 @@ body {
     gap: 14px;
     padding: 16px;
     overflow-y: auto;
-    flex-grow: 1;
-    min-height: 0;
+    height: calc(100vh - 130px);
+    max-height: calc(100vh - 130px);
+    box-sizing: border-box;
 }
 
 #col-timeline .column-body {
@@ -194,13 +197,13 @@ body {
 .timeline-container::-webkit-scrollbar-track,
 .console-body::-webkit-scrollbar-track,
 .thumbnails-grid::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.15);
+    background: rgba(255, 255, 255, 0.02);
 }
 .column-body::-webkit-scrollbar-thumb,
 .timeline-container::-webkit-scrollbar-thumb,
 .console-body::-webkit-scrollbar-thumb,
 .thumbnails-grid::-webkit-scrollbar-thumb {
-    background-color: rgba(255, 255, 255, 0.15);
+    background-color: rgba(255, 255, 255, 0.28);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: padding-box;
@@ -209,7 +212,7 @@ body {
 .timeline-container::-webkit-scrollbar-thumb:hover,
 .console-body::-webkit-scrollbar-thumb:hover,
 .thumbnails-grid::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(255, 255, 255, 0.3);
+    background-color: rgba(255, 255, 255, 0.5);
 }
 
 /* ── UI Components: Card & Form ─────────────────────────────────────────── */
@@ -528,6 +531,7 @@ body {
 /* ── Step 2: Timeline Section ────────────────────────────────────────────── */
 .timeline-container {
     flex-grow: 1;
+    min-height: 0;
     overflow-y: auto;
     padding-right: 4px;
     display: flex;
